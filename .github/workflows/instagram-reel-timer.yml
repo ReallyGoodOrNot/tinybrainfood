@@ -14,7 +14,8 @@ on:
     branches: [main]
     paths: ["videos/*.mp4"]
 
-permissions: {}
+permissions:
+  contents: read
 
 env:
   TZ: Etc/GMT-8            # UTC+8 (the sign is reversed in Etc/ names)
@@ -31,10 +32,12 @@ jobs:
       - name: Which videos and when
         id: which
         env:
-          COMMITS: ${{ toJSON(github.event.commits) }}
+          GH_TOKEN: ${{ github.token }}
+          RANGE: ${{ github.event.before }}...${{ github.event.after }}
         run: |
           today=$(date +%F)
-          ids=$(echo "$COMMITS" | jq -r '.[].added[]?' | sed -n 's#^videos/\(.*\)\.mp4$#\1#p' | sort -u \
+          # Files this push added (the push payload no longer lists them, so ask the compare API).
+          ids=$(gh api "repos/$GITHUB_REPOSITORY/compare/$RANGE" --jq '.files[]? | select(.status == "added") | .filename' | sed -n 's#^videos/\(.*\)\.mp4$#\1#p' | sort -u \
             | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+$' | grep "^$today-" | tr '\n' ' ' || true)
           [ -n "$ids" ] || { echo "No new video for today ($today) in this push: nothing to do."; exit 0; }
           at=$(date -d "$today 20:05" +%s)
