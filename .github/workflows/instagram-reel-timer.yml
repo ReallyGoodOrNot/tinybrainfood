@@ -1,0 +1,116 @@
+name: Instagram Reel timer
+
+# Starts the Instagram Reel post (instagram-8pm.yml in the private tiny-brain-food repo) at 8:05 PM UTC+8.
+# Why it lives here: GitHub's own schedule runs hours late or not at all for that repo, and Meta can't
+# schedule Reels. This repo is public, so waiting here costs no Actions minutes.
+# How: the daily post (around noon) pushes the day's video to videos/<id>.mp4. That push starts this
+# workflow, which waits until 8:05 PM and then starts instagram-8pm.yml for that video. A video pushed
+# after 8:05 PM starts it right away. instagram-8pm.yml skips a Reel that's already posted, so an extra
+# start never posts twice.
+# Needs secret REEL_TOKEN: a fine-grained token with Actions: Read and write on tiny-brain-food only.
+
+on:
+  push:
+    branches: [main]
+    paths: ["videos/*.mp4"]
+
+permissions: {}
+
+env:
+  TZ: Etc/GMT-8            # UTC+8 (the sign is reversed in Etc/ names)
+
+jobs:
+  # A job can run at most 6 hours, so the wait is split over four jobs (up to 23 hours, enough for a video pushed just after midnight).
+  wait1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    outputs:
+      ids: ${{ steps.which.outputs.ids }}
+      at: ${{ steps.which.outputs.at }}
+    steps:
+      - name: Which videos and when
+        id: which
+        env:
+          COMMITS: ${{ toJSON(github.event.commits) }}
+        run: |
+          today=$(date +%F)
+          ids=$(echo "$COMMITS" | jq -r '.[].added[]?' | sed -n 's#^videos/\(.*\)\.mp4$#\1#p' | sort -u \
+            | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+$' | grep "^$today-" | tr '\n' ' ' || true)
+          [ -n "$ids" ] || { echo "No new video for today ($today) in this push: nothing to do."; exit 0; }
+          at=$(date -d "$today 20:05" +%s)
+          echo "Videos: $ids. Instagram Reel at $(date -d @$at '+%F %H:%M') UTC+8."
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+          echo "at=$at" >> "$GITHUB_OUTPUT"
+      - name: Wait
+        if: steps.which.outputs.ids != ''
+        env:
+          AT: ${{ steps.which.outputs.at }}
+        run: |
+          left=$(( AT - $(date +%s) ))
+          [ "$left" -gt 0 ] || { echo "It's 8:05 PM or later."; exit 0; }
+          s=$(( left < 20700 ? left : 20700 ))   # at most 5 h 45 min in this job
+          echo "Waiting $((s / 60)) min."
+          sleep "$s"
+
+  wait2:
+    needs: wait1
+    if: needs.wait1.outputs.ids != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Wait
+        env:
+          AT: ${{ needs.wait1.outputs.at }}
+        run: |
+          left=$(( AT - $(date +%s) ))
+          [ "$left" -gt 0 ] || { echo "It's 8:05 PM or later."; exit 0; }
+          s=$(( left < 20700 ? left : 20700 ))   # at most 5 h 45 min in this job
+          echo "Waiting $((s / 60)) min."
+          sleep "$s"
+
+  wait3:
+    needs: [wait1, wait2]
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Wait
+        env:
+          AT: ${{ needs.wait1.outputs.at }}
+        run: |
+          left=$(( AT - $(date +%s) ))
+          [ "$left" -gt 0 ] || { echo "It's 8:05 PM or later."; exit 0; }
+          s=$(( left < 20700 ? left : 20700 ))   # at most 5 h 45 min in this job
+          echo "Waiting $((s / 60)) min."
+          sleep "$s"
+
+  wait4:
+    needs: [wait1, wait3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Wait
+        env:
+          AT: ${{ needs.wait1.outputs.at }}
+        run: |
+          left=$(( AT - $(date +%s) ))
+          [ "$left" -gt 0 ] || { echo "It's 8:05 PM or later."; exit 0; }
+          s=$(( left < 20700 ? left : 20700 ))   # at most 5 h 45 min in this job
+          echo "Waiting $((s / 60)) min."
+          sleep "$s"
+
+  start:
+    needs: [wait1, wait4]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Start the Instagram Reel post
+        env:
+          GH_TOKEN: ${{ secrets.REEL_TOKEN }}
+          IDS: ${{ needs.wait1.outputs.ids }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::Secret REEL_TOKEN is missing."; exit 1; }
+          for id in $IDS; do
+            echo "Starting instagram-8pm.yml for $id"
+            gh api -X POST repos/ReallyGoodOrNot/tiny-brain-food/actions/workflows/instagram-8pm.yml/dispatches \
+              -f ref=main -f "inputs[id]=$id"
+          done
